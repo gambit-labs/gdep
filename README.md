@@ -4,8 +4,18 @@ A lightweight submodule manager for git and bitbucket
 
 ### Installing
 
+Copy this command and paste it into your bash shell. (Should work with Git Bash for Windows too)
+
+#### For linux
+
 ```console
-$ curl -sSL https://raw.githubusercontent.com/gambit-labs/gdep/master/gdep > /usr/local/bin/gdep
+$ curl -sSL https://raw.githubusercontent.com/gambit-labs/gdep/master/gdep > /usr/local/bin/gdep && chmod +x /usr/local/bin/gdep
+```
+
+#### For windows
+
+```console
+$ curl -sSL https://raw.githubusercontent.com/gambit-labs/gdep/master/gdep > "/c/Program Files (x86)/Git/bin/gdep" && chmod +x "/c/Program Files (x86)/Git/bin/gdep"
 ```
 
 ### Key commands
