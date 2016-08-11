@@ -1,0 +1,187 @@
+#!/bin/bash
+set -e
+
+DEPFILE=$(pwd)/.gdeps
+
+# usage: gdep add [vcs type=(hg|git)] [clone url] [refspec (optional)] [folder clone to (optional)] [subfolder to use (optional)]
+add(){
+	vcs=$1
+	cloneurl=$2
+
+	# Choose default branch based on vcs
+	if [[ ${vcs} == "git" ]]; then
+		refspec=${3:-master}
+	elif [[ ${vcs} == "hg" ]]; then
+		refspec=${3:-default}
+	fi
+
+	# Default to the last name in the url, i.e. http://github.com/nyeholt/silverstripe-webservices.git => silverstripe-webservices
+	foldername=${4:-$(basename ${cloneurl} | cut -d. -f1)}
+	subfolder=${5:-.}
+
+	# Supports http, https, git and ssh protocols
+	if [[ -z $(echo ${cloneurl} | grep "ssh://") && -z $(echo ${cloneurl} | grep "http://") && -z $(echo ${cloneurl} | grep "https://") && -z $(echo ${cloneurl} | grep "git@") ]]; then
+		echo "gdep supports the http://, https://, ssh:// and git protocols, which ${cloneurl} doesn't use."
+		exit 1
+	fi
+
+	echo "Adding submodule ${foldername}..."
+
+	# If the .gdep file exists, and the folder exists; remove the previous folder entry
+	if [[ -f ${DEPFILE} && ! -z $(grep " $foldername " ${DEPFILE}) ]]; then
+		sed -e "/$foldername/d" -i ${DEPFILE}
+	fi
+
+	echo "$vcs $foldername $cloneurl $refspec $subfolder" >> ${DEPFILE}
+	update $foldername
+}
+
+# usage: gdep update
+# usage: gdep update [foldername]
+update() {
+
+	check_for_gdep_file
+
+	while read line; do
+		line=($line)
+		vcs=${line[0]}
+		folder=${line[1]}
+		cloneurl=${line[2]}
+		refspec=${line[3]}
+		subfolder=${line[4]}
+
+		# gdep should update the folder if a) no arguments are provided or b) the current folder is provided in the arguments list
+		if [[ $# == 0 || ! -z $(echo "$@" | grep ${folder}) ]]; then
+
+			dlfolder=$(mktemp -d)
+			folderpath=$(pwd)/${folder}
+
+			# Clone the repo to the temp directory
+			echo "Cloning ${cloneurl} into ${folder} using temp directory ${dlfolder}..."
+			${vcs} clone ${cloneurl} ${dlfolder}
+
+			# Checkout the 
+			if [[ ${vcs} == "git" ]]; then
+				cd ${dlfolder} && git checkout ${refspec}
+			elif [[ ${vcs} == "hg" ]]; then
+				cd ${dlfolder} && hg update ${refspec}
+			fi
+			echo "Using refspec ${refspec}..."
+
+			# Ensure the current folder isn't there
+			if [[ -e ${folderpath} ]]; then rm -r ${folderpath}; fi
+
+			# Copy over the specified subfolder to the 
+			cp -r ${dlfolder}/${subfolder} ${folderpath}
+			
+			# Get the latest commit
+			if [[ ${vcs} == "git" ]]; then
+				cp ${dlfolder}/.git/refs/heads/master ${folderpath}/.gitstate
+			elif [[ ${vcs} == "hg" ]]; then
+				cd ${dlfolder} && echo $(hg identify --id) > ${folderpath}/.hgstate
+			fi
+
+			# Remove the temp folder and the .hg|.git directory
+			rm -r ${dlfolder} ${folderpath}/.${vcs}
+
+			echo "Done syncing submodule ${folder}."
+		fi
+	done <${DEPFILE}
+}
+
+# usage: gdep list
+list(){
+
+	check_for_gdep_file
+
+	echo -e "FOLDER  \tBRANCH  \tCOMMIT \t\tURL"
+	while read line; do
+		line=($line)
+		vcs=${line[0]}
+		folder=${line[1]}
+		cloneurl=${line[2]}
+		refspec=${line[3]}
+		subfolder=${line[4]:-.}
+
+		echo -e "${folder}\t${refspec}  \t$(cat ${folder}/.${vcs}state | cut -c-10)  \t${cloneurl}"
+	done <${DEPFILE}
+}
+
+# usage: gdep remove [foldername]
+remove() {
+
+	check_for_gdep_file
+
+	if [[ $# == 0 ]]; then
+		echo "This method requires at least one argument: the submodule(s) to remove"
+		exit 1
+	fi
+
+	for folder in $@; do
+		if [[ ! -z $(grep " $folder " ${DEPFILE}) ]]; then
+			sed -e "/$folder/d" -i ${DEPFILE}
+			rm -r ${folder}
+
+			echo "Successfully removed ${folder}"
+		fi
+	done
+}
+
+check_for_gdep_file(){
+	# Ensure the .gdep file is present
+	if [[ ! -f ${DEPFILE} ]]; then
+		echo "You haven't added any submodules yet"
+		exit 1
+	fi
+}
+
+usage(){
+	cat <<EOF
+Welcome to gdep, the simple git and merurial submodule manager!
+It downloads, updates and removes foreign repositories for you in an automated fashion.
+
+Usage:
+ - gdep add [vcs type=(hg|git)] [clone url] [refspec (optional)] [folder clone to (optional)] [subfolder to use (optional)]
+   This command creates a new subfolder for you. 
+
+   The first argument specifies if you want to clone a git or hg repo.
+   The second argument is the clone url, in this form: http[s]://host.xz[:port]/path/to/repo.git/ or ssh://[user@]host.xz[:port]/path/to/repo.git/
+   The third argument is optional; which refspec you want to checkout. It may be a branch, bookmark or specific commit. Defaults to the default branch.
+   The fourth argument is optional; it specifies the name of the subfolder you want to create. 
+      For example; if the clone url is http://github.com/nyeholt/silverstripe-webservices, the folder would be named silverstripe-webservices
+   The fifth argument is optional; it may pick a specific subfolder of the cloned repository and use that only. Defaults to use the whole repo.
+ 
+ - gdep update [foldername1] [foldername2] [foldernameN]
+   This command updates one or more submodules. If zero arguments are given; it will update all submodules.
+
+ - gdep list
+   This command lists all submodules
+
+ - gdep remove [foldername1] [foldername2] [foldernameN]
+   This command removes a submodule. At least one argument is required.
+EOF
+}
+
+# If nothing is specified, return usage
+if [[ $# == 0 ]]; then
+	usage
+	exit
+fi
+CMD=$1
+shift
+
+# Commands available
+case $CMD in
+	'add')
+		add $@;;
+	'list')
+		list;;
+	'update')
+		update $@;;
+	'remove')
+		remove $@;;
+	'help')
+		usage;;
+	*) 
+		usage;;
+esac
